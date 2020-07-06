@@ -6,15 +6,14 @@ import json
 # pattern looks for the text beween [[double brackets]]
 # above would match with 'double brackets'
 regexPattern = "\[\[([^]]+)\]\]"
-subredditsToStream = ["vexillology"]
+subredditsToStream = ["rzrkyb","bowdenco"]
 
-replyText = """
-    {}
+replyText = """{}
 
-    ---
+---
 
-    This action was performed automatically | [Source](https://github.com/bowdens/flagbot)
-"""
+This action was performed automatically | [Source](https://github.com/bowdens/flagbot)"""
+
 flagText = "[Flag of {}](https://www.example.com/flag/{}.png)"
 
 with open("countries.json") as f:
@@ -42,13 +41,16 @@ def match_country_to_code(name):
         for potentialName in potentialNames:
             if potentialName.lower().startswith(name.lower()):
                 matches.add((code, countryData["name"]["common"]))
+                if len(matches) > 1:
+                    # no point searching further...
+                    break
 
     if len(matches) == 1:
         return matches.pop()
+    elif len(matches) > 1:
+        print("we got multiple matches for {}: {}".format(name, ", ".join(["{} - {}".format(match[0], match[1]) for match in matches])))
+        return None
     else:
-        print("we got multiple matches for {}:".format(name))
-        for match in matches:
-            print("  {} - {}".format(match[0], match[1]))
         return None
 
 def countries_to_tuples(countries):
@@ -56,17 +58,34 @@ def countries_to_tuples(countries):
     # filter out the None results
     return set(filter(None, [match_country_to_code(c) for c in countries]))
 
-def submit_reply(parentComment, body, debug=True):
+def submit_reply(me, parentComment, body, debug=True):
     if debug is True:
-        print("####\nreplying to comment id {}\nbody:{}\n####".format(parentComment, body))
+        print("####replying to comment id {}, body:{} (debug!)####".format(parentComment, body))
     else:
-        raise Exception("production comments not implemented yet!")
+        # first we must check to see if we've already replied to this comment
+        parentComment.reply_sort = "old" # assumption here: we have replied early enought to be in the first 10 comments
+        parentComment.reply_limit = 10
+        parentComment.refresh() # have to do this to get a list of replies
+        for comment in parentComment.replies:
+            if comment.author.id == me.id:
+                print("####was going to reply to comment id {} but i've already replied####".format(parentComment.permalink))
+                return False
+
+        print("####\nreplying to comment id {}\nbody:{}\n####".format(parentComment.permalink, body))
+
+        try:
+            newComment = parentComment.reply(body)
+            print("   made comment with link = {}".format(newComment.permalink))
+            return True
+        except praw.exceptions.APIException as e:
+            print("   failed to make comment: {}".format(e))
+            return False
 
 def create_reply(comment, codeCountryTuples):
     replyStrings = []
     for code, country in codeCountryTuples:
         replyStrings.append(flagText.format(country, code))
-    replyBody = replyText.format("\n  ".join(replyStrings))
+    replyBody = replyText.format("  \n".join(replyStrings))
     return replyBody
 
 def matches(text):
@@ -82,21 +101,26 @@ def debug_main_loop(reddit, subreddits):
     """]:
         countryCodeTuples = countries_to_tuples(matches(comment))
         if len(countryCodeTuples) > 0:
-            submit_reply(comment, create_reply(comment, countryCodeTuples), debug=True)
+            submit_reply(reddit.user.me(), comment, create_reply(comment, countryCodeTuples), debug=True)
 
 def main_loop(reddit, subreddits):
     for comment in subreddits.stream.comments():
         countryCodeTuples = countries_to_tuples(matches(comment.body))
         if len(countryCodeTuples) > 0:
-            submit_reply(create_reply(comment, countryCodeTuples), debug=False)
+            submit_reply(reddit.user.me(), comment, create_reply(comment, countryCodeTuples), debug=False)
 
 def main(debug=True):
+    print("---initialising praw---")
     reddit = praw.Reddit("flagbot")
+    print("---generating subreddits---")
     subreddits = reddit.subreddit("+".join(subredditsToStream))
+    print("   subreddits are: {}".format(", ".join(subredditsToStream)))
     if debug is True:
+        print("---starting debug loop---")
         debug_main_loop(reddit, subreddits)
     else:
+        print("---starting main loop---")
         main_loop(reddit, subreddits)
 
 if __name__ == "__main__":
-    main()
+    main(debug=False)
